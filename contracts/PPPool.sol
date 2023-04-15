@@ -12,8 +12,13 @@ contract PPPool is ReentrancyGuard {
     uint256 public constant FIELD_SIZE = 21888242871839275222246405745257275088548364400416034343698204186575808495617;
     uint256 public constant ZERO_VALUE = 21663839004416932945382355908790599225266501822907911457504978515578255421292; // = keccak256("tornado") % FIELD_SIZE
     uint32 public constant ROOT_HISTORY_SIZE = 100;
+    // use smaller amounts to prevent exceeding 248 bit size
+    int256 public constant MAX_EXT_AMOUNT = 2**90;
+    uint256 public constant MIN_EXT_AMOUNT_LIMIT = 0.5 ether;
 
     address public immutable ppfactory;
+    IVerifier public immutable verifier2;
+    IVerifier public immutable verifier16;
 
     bool public initialized;
 
@@ -24,16 +29,47 @@ contract PPPool is ReentrancyGuard {
     uint32 public nextIndex = 0;
     IERC20 public tokenA;
     IERC20 public tokenB;
+    uint256 public lastBalanceA;
+    uint256 public lastBalanceB;
+    uint256 public maximumDepositAmount;
 
     mapping(uint256 => bytes32) public filledSubtrees;
     mapping(uint256 => bytes32) public roots;
+    mapping(bytes32 => bool) public nullifierHashes;
 
     error Initialized();
     error NotFactory();
     error Unauthorized();
+    error InvalidValue();
 
-    constructor(address ppfactory_) {
+    event NewCommitment(bytes32 commitment, uint256 index, bytes encryptedOutput);
+    event NewNullifier(bytes32 nullifier);
+
+    // remove fees
+    struct ExtData {
+        address recipient;
+        int256 publicAmountA; // can be +/-
+        int256 publicAmountB; // can be +/-
+        bool isTrade;
+        address relayer;
+        bytes encryptedOutput1;
+        bytes encryptedOutput2;
+    }
+
+    struct Proof {
+        bytes proof;
+        bytes32 root;
+        bytes32[] inputNullifiers;
+        bytes32[2] outputCommitments;
+        uint256 publicAmountA;
+        uint256 publicAmountB;
+        bytes32 extDataHash;
+    }
+
+    constructor(address ppfactory_, address verifier2_, address verifier16_) {
         ppfactory = ppfactory_;
+        verifier2 = IVerifier(verifier2_);
+        verifier16 = IVerifier(verifier16_);
     }
 
 
@@ -42,7 +78,8 @@ contract PPPool is ReentrancyGuard {
         address hasher_,
         uint32 levels_,
         address tokenA_,
-        address tokenB_
+        address tokenB_,
+        uint256 maximumDepositAmount_
     ) public {
         if (msg.sender == ppfactory) {
             if (initialized) {
@@ -55,6 +92,7 @@ contract PPPool is ReentrancyGuard {
                 levels = levels_;
                 tokenA = IERC20(tokenA_);
                 tokenB = IERC20(tokenB_);
+                maximumDepositAmount = maximumDepositAmount_;
 
                 for (uint32 i = 0; i < levels; i++) {
                     filledSubtrees[i] = zeros(i);
@@ -183,6 +221,20 @@ contract PPPool is ReentrancyGuard {
     //////////////////////////////////////////////////////
 
     /**
+     * @dev Helper function to get reserve of token A
+     */
+    function getReservesA() public view returns (uint256) {
+        return tokenA.balanceOf(address(this));
+    }
+
+    /**
+     * @dev Helper function to get reserve of token B
+     */
+    function getReservesB() public view returns (uint256) {
+        return tokenB.balanceOf(address(this));
+    }
+
+    /**
      * @dev Handles deposit, withdraw, transfers, swaps within the contract
      * Registration of identities will be handled by offchain processes like
      * Worldcoin or Lens for example.
@@ -190,12 +242,45 @@ contract PPPool is ReentrancyGuard {
      * To gate the pool, initialize with a reputation contract
      */
     function transact(
-        uint256[12] memory worldIdParams
+        uint256[12] memory worldIdParams,
+        Proof memory args,
+        ExtData memory extData
     ) public {
         if (address(reputation) == address(0)) {
+            if(extData.publicAmountA > 0) {
+                tokenA.transferFrom(
+                    msg.sender,
+                    address(this),
+                    uint256(extData.publicAmountA)
+                );
+            }
+            if(extData.publicAmountB > 0) {
+                tokenB.transferFrom(
+                    msg.sender,
+                    address(this),
+                    uint256(extData.publicAmountB)
+                );
+            }
+            _transact(args, extData);
         } else {
             // reverts if not reputable
             reputation.checkReputation(msg.sender, worldIdParams);
+
+            if(extData.publicAmountA > 0) {
+                tokenA.transferFrom(
+                    msg.sender,
+                    address(this),
+                    uint256(extData.publicAmountA)
+                );
+            }
+            if(extData.publicAmountB > 0) {
+                tokenB.transferFrom(
+                    msg.sender,
+                    address(this),
+                    uint256(extData.publicAmountB)
+                );
+            }
+            _transact(args, extData);
         }
     }
 
@@ -203,12 +288,167 @@ contract PPPool is ReentrancyGuard {
      * @dev overloaded function to be called if reputation is not address 0
      */
     function transact(
-
+        Proof memory args,
+        ExtData memory extData
     ) public {
         if (address(reputation) != address(0)) {
             revert Unauthorized();
         } else {
+            if(extData.publicAmountA > 0) {
+                tokenA.transferFrom(
+                    msg.sender,
+                    address(this),
+                    uint256(extData.publicAmountA)
+                );
+            }
+            if(extData.publicAmountB > 0) {
+                tokenB.transferFrom(
+                    msg.sender,
+                    address(this),
+                    uint256(extData.publicAmountB)
+                );
+            }
+            _transact(args, extData);
+        }
+    }
 
+    /**
+     * @dev calculate Public Amount
+     */
+    function calculatePublicAmount(int256 _extAmount, uint256 _fee) public pure returns (uint256) {
+        // require(_fee < MAX_FEE, "Invalid fee");
+        require(_extAmount > -MAX_EXT_AMOUNT && _extAmount < MAX_EXT_AMOUNT, "Invalid ext amount");
+        int256 publicAmount = _extAmount - int256(_fee);
+        return (publicAmount >= 0) ? uint256(publicAmount) : FIELD_SIZE - uint256(-publicAmount);
+    }
+
+
+    /**
+     * @dev internal function for transact
+     */
+    function _transact(Proof memory _args, ExtData memory _extData) internal nonReentrant {
+        require(isKnownRoot(_args.root), "Invalid merkle root");
+
+        // Check for double spend
+        for (uint256 i = 0; i < _args.inputNullifiers.length;) {
+            require(!nullifierHashes[_args.inputNullifiers[i]], "Input is already spent");
+
+            unchecked {
+                ++i;
+            }
+        }
+
+        // Check if the field size is correct
+        require(uint256(_args.extDataHash) == uint256(keccak256(abi.encode(_extData))) % FIELD_SIZE, "Incorrect external data hash");
+
+
+        // withdraw, deposit, transfer case
+        if (!_extData.isTrade) {
+            // check if the amount is correct
+            // assume no fees
+            // require(_args.publicAmount == calculatePublicAmount(_extData.extAmount, _extData.fee), "Invalid public amount");
+            require(_args.publicAmountA == calculatePublicAmount(_extData.publicAmountA, 0), "Invalid Amount A");
+            require(_args.publicAmountB == calculatePublicAmount(_extData.publicAmountB, 0), "Invalid Amount B");
+        } else {
+            // ensure that AMM curve is obeyed
+            // uses uniswapv2 constant product
+            uint256 reserveA = getReservesA();
+            uint256 reserveB = getReservesB();
+
+            require(_args.publicAmountA < reserveA && _args.publicAmountB < reserveB, 'INSUFFICIENT_LIQUIDITY');
+
+            uint balanceA;
+            uint balanceB;
+            balanceA = reserveA + calculatePublicAmount(_extData.publicAmountA, 0);
+            balanceB = reserveB + calculatePublicAmount(_extData.publicAmountB, 0);
+
+            require(balanceA * balanceB >= reserveA * reserveB, 'K violated');
+
+        }
+
+        // Verify Transaction Proof
+        require(verifyProof(_args), "Invalid transaction proof");
+
+        // set nullifier hashes
+        for (uint256 i = 0; i < _args.inputNullifiers.length;) {
+            nullifierHashes[_args.inputNullifiers[i]] = true;
+
+            unchecked {
+                ++i;
+            }
+        }
+
+        // withdrawal case, note that deposit case is already handled in top level transact
+        if (_extData.publicAmountA < 0) {
+            require(_extData.recipient != address(0), "Can't withdraw to zero address");
+            tokenA.transfer(_extData.recipient, uint256(-_extData.publicAmountA));
+        }
+        if (_extData.publicAmountB < 0) {
+            require(_extData.recipient != address(0), "Can't withdraw to zero address");
+            tokenA.transfer(_extData.recipient, uint256(-_extData.publicAmountB));
+        }
+
+        lastBalanceA = getReservesA();
+        lastBalanceB = getReservesB();
+        _insert(_args.outputCommitments[0], _args.outputCommitments[1]);
+        emit NewCommitment(_args.outputCommitments[0], nextIndex - 2, _extData.encryptedOutput1);
+        emit NewCommitment(_args.outputCommitments[1], nextIndex - 1, _extData.encryptedOutput2);
+
+        for (uint256 i = 0; i < _args.inputNullifiers.length; i++) {
+            emit NewNullifier(_args.inputNullifiers[i]);
+        }
+    }
+
+    /**
+     * @dev verification
+     */
+    function verifyProof(Proof memory _args) public view returns (bool) {
+        if (_args.inputNullifiers.length == 2) {
+        return
+            verifier2.verifyProof(
+            _args.proof,
+            [
+                uint256(_args.root),
+                _args.publicAmountA,
+                _args.publicAmountB,
+                uint256(_args.extDataHash),
+                uint256(_args.inputNullifiers[0]),
+                uint256(_args.inputNullifiers[1]),
+                uint256(_args.outputCommitments[0]),
+                uint256(_args.outputCommitments[1])
+            ]
+            );
+        } else if (_args.inputNullifiers.length == 16) {
+        return
+            verifier16.verifyProof(
+            _args.proof,
+            [
+                uint256(_args.root),
+                _args.publicAmountA,
+                _args.publicAmountB,
+                uint256(_args.extDataHash),
+                uint256(_args.inputNullifiers[0]),
+                uint256(_args.inputNullifiers[1]),
+                uint256(_args.inputNullifiers[2]),
+                uint256(_args.inputNullifiers[3]),
+                uint256(_args.inputNullifiers[4]),
+                uint256(_args.inputNullifiers[5]),
+                uint256(_args.inputNullifiers[6]),
+                uint256(_args.inputNullifiers[7]),
+                uint256(_args.inputNullifiers[8]),
+                uint256(_args.inputNullifiers[9]),
+                uint256(_args.inputNullifiers[10]),
+                uint256(_args.inputNullifiers[11]),
+                uint256(_args.inputNullifiers[12]),
+                uint256(_args.inputNullifiers[13]),
+                uint256(_args.inputNullifiers[14]),
+                uint256(_args.inputNullifiers[15]),
+                uint256(_args.outputCommitments[0]),
+                uint256(_args.outputCommitments[1])
+            ]
+            );
+        } else {
+        revert("unsupported input count");
         }
     }
 }

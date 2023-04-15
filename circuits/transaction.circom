@@ -1,45 +1,62 @@
+pragma circom 2.0.0;
+
 include "../node_modules/circomlib/circuits/poseidon.circom";
-include "./merkleProof.circom"
-include "./keypair.circom"
+include "../node_modules/circomlib/circuits/comparators.circom";
+include "./merkleProof.circom";
+include "./keypair.circom";
 
 /*
 Utxo structure:
 {
-    inAmountTokenA,       // tokenA used for swap
-    outAmountTokenA,
-    reserveTokenA,      // tokenA reserves within the contract
-    inAmountTokenB,       // tokenB used for swap
-
-    reserveTokenB,      // tokenB reserves within the contract
-    pubkey,
-    blinding,           // random number
+    amountTokenA,         // tokenA input
+    amountTokenB,         // tokenB input
+    pubkey,               // public key
+    blinding,             // random number for obfuscation
 }
-commitment = hash(amount, pubKey, blinding)
-nullifier = hash(commitment, merklePath, sign(privKey, commitment, merklePath))
+input_commitment = hash(
+    inA,
+    inB,
+    amount,
+    pubKey,
+    blinding,
+    isTrade
+)
+nullifier = hash(
+    commitment,
+    merklePath,
+    sign(privKey, commitment, merklePath)
+)
 */
 
 // Universal JoinSplit transaction with nIns inputs and 2 outputs
 template Transaction(levels, nIns, nOuts, zeroLeaf) {
     signal input root;
+
     // extAmount = external amount used for deposits and withdrawals
     // correct extAmount range is enforced on the smart contract
     // publicAmount = extAmount - fee
-    signal input publicAmount;
+
+    // assume no fee for simplicity in this case
+    signal input publicAmountA;
+    signal input publicAmountB;
     signal input extDataHash;
+    signal input isTrade;
 
     // data for transaction inputs
-    signal         input inputNullifier[nIns];
-    signal private input inAmount[nIns];
-    signal private input inPrivateKey[nIns];
-    signal private input inBlinding[nIns];
-    signal private input inPathIndices[nIns];
-    signal private input inPathElements[nIns][levels];
+    signal input inputNullifier[nIns];
+    signal input inAmountA[nIns];
+    signal input inAmountB[nIns];
+    signal input inPrivateKey[nIns];
+    signal input inBlinding[nIns];
+    signal input inPathIndices[nIns];
+    signal input inPathElements[nIns][levels];
 
     // data for transaction outputs
-    signal         input outputCommitment[nOuts];
-    signal private input outAmount[nOuts];
-    signal private input outPubkey[nOuts];
-    signal private input outBlinding[nOuts];
+    signal input outputCommitment[nOuts];
+    signal input outAmountA[nOuts];
+    signal input outAmountB[nOuts];
+    signal input outPubkey[nOuts];
+    signal input outBlinding[nOuts];
 
     component inKeypair[nIns];
     component inSignature[nIns];
@@ -47,17 +64,25 @@ template Transaction(levels, nIns, nOuts, zeroLeaf) {
     component inNullifierHasher[nIns];
     component inTree[nIns];
     component inCheckRoot[nIns];
-    var sumIns = 0;
+    component inAmountSumGreaterThanZero[nIns];
+
+    var sumInsA = 0;
+    var sumInsB = 0;
+
+    component inAmountACheck[nOuts];
+    component inAmountBCheck[nOuts];
 
     // verify correctness of transaction inputs
     for (var tx = 0; tx < nIns; tx++) {
         inKeypair[tx] = Keypair();
         inKeypair[tx].privateKey <== inPrivateKey[tx];
 
-        inCommitmentHasher[tx] = Poseidon(3);
-        inCommitmentHasher[tx].inputs[0] <== inAmount[tx];
-        inCommitmentHasher[tx].inputs[1] <== inKeypair[tx].publicKey;
-        inCommitmentHasher[tx].inputs[2] <== inBlinding[tx];
+        inCommitmentHasher[tx] = Poseidon(5);
+        inCommitmentHasher[tx].inputs[0] <== inAmountA[tx];
+        inCommitmentHasher[tx].inputs[1] <== inAmountB[tx];
+        inCommitmentHasher[tx].inputs[2] <== inKeypair[tx].publicKey;
+        inCommitmentHasher[tx].inputs[3] <== inBlinding[tx];
+        inCommitmentHasher[tx].inputs[4] <== isTrade;
 
         inSignature[tx] = Signature();
         inSignature[tx].privateKey <== inPrivateKey[tx];
@@ -77,36 +102,51 @@ template Transaction(levels, nIns, nOuts, zeroLeaf) {
             inTree[tx].pathElements[i] <== inPathElements[tx][i];
         }
 
-        // check merkle proof only if amount is non-zero
+        // check merkle proof only if amount A and B is non-zero
+        inAmountSumGreaterThanZero[tx] = GreaterThan(128);
+        inAmountSumGreaterThanZero[tx].in[0] <== inAmountA[tx] + inAmountB[tx];
+        inAmountSumGreaterThanZero[tx].in[1] <== 0;
+
         inCheckRoot[tx] = ForceEqualIfEnabled();
         inCheckRoot[tx].in[0] <== root;
         inCheckRoot[tx].in[1] <== inTree[tx].root;
-        inCheckRoot[tx].enabled <== inAmount[tx];
+        inCheckRoot[tx].enabled <== inAmountSumGreaterThanZero[tx].out;
 
-        // We don't need to range check input amounts, since all inputs are valid UTXOs that
-        // were already checked as outputs in the previous transaction (or zero amount UTXOs that don't
-        // need to be checked either).
+        sumInsA += inAmountA[tx];
+        sumInsB += inAmountB[tx];
 
-        sumIns += inAmount[tx];
+        // Omit checks, assume inputs are less than 248 bits
+        // to be enforced on frontend
+        // ~~Check that both amount fits into 248 bits to prevent overflow~~
+        // inAmountACheck[tx] = Num2Bits(248);
+        // inAmountACheck[tx].in <== sumInsA;
+        // inAmountBCheck[tx] = Num2Bits(248);
+        // inAmountBCheck[tx].in <== sumInsB;
     }
 
     component outCommitmentHasher[nOuts];
-    component outAmountCheck[nOuts];
-    var sumOuts = 0;
+    component outAmountACheck[nOuts];
+    component outAmountBCheck[nOuts];
+    var sumOutsA = 0;
+    var sumOutsB = 0;
 
     // verify correctness of transaction outputs
     for (var tx = 0; tx < nOuts; tx++) {
-        outCommitmentHasher[tx] = Poseidon(3);
-        outCommitmentHasher[tx].inputs[0] <== outAmount[tx];
-        outCommitmentHasher[tx].inputs[1] <== outPubkey[tx];
-        outCommitmentHasher[tx].inputs[2] <== outBlinding[tx];
+        outCommitmentHasher[tx] = Poseidon(4);
+        outCommitmentHasher[tx].inputs[0] <== outAmountA[tx];
+        outCommitmentHasher[tx].inputs[1] <== outAmountB[tx];
+        outCommitmentHasher[tx].inputs[2] <== outPubkey[tx];
+        outCommitmentHasher[tx].inputs[3] <== outBlinding[tx];
         outCommitmentHasher[tx].out === outputCommitment[tx];
 
-        // Check that amount fits into 248 bits to prevent overflow
-        outAmountCheck[tx] = Num2Bits(248);
-        outAmountCheck[tx].in <== outAmount[tx];
+        sumOutsA += outAmountA[tx];
+        sumOutsB += outAmountB[tx];
 
-        sumOuts += outAmount[tx];
+        // Check that both amount fits into 248 bits to prevent overflow
+        outAmountACheck[tx] = Num2Bits(248);
+        outAmountACheck[tx].in <== sumOutsA;
+        outAmountBCheck[tx] = Num2Bits(248);
+        outAmountBCheck[tx].in <== sumOutsB;
     }
 
     // check that there are no same nullifiers among all inputs
@@ -123,7 +163,8 @@ template Transaction(levels, nIns, nOuts, zeroLeaf) {
     }
 
     // verify amount invariant
-    sumIns + publicAmount === sumOuts;
+    sumInsA + publicAmountA === sumOutsA;
+    sumInsB + publicAmountB === sumOutsB;
 
     // optional safety constraint to make sure extDataHash cannot be changed
     signal extDataSquare <== extDataHash * extDataHash;

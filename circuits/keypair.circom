@@ -1,6 +1,8 @@
+pragma circom 2.0.0;
+
 include "../node_modules/circomlib/circuits/poseidon.circom";
 
-// Since we don't use signatures, the keypair can be based on a simple hash
+// Keypair is a 1 input hash from privateKey to publicKey
 template Keypair() {
     signal input privateKey;
     signal output publicKey;
@@ -10,6 +12,7 @@ template Keypair() {
     publicKey <== hasher.out;
 }
 
+// Signature is a 3 input hash using private key, commitment, and merklePath
 template Signature() {
     signal input privateKey;
     signal input commitment;

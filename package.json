@@ -9,6 +9,7 @@
     "circom_runtime": "^0.1.22",
     "circomlib": "^2.0.5",
     "circomlibjs": "^0.1.7",
-    "snarkjs": "^0.6.10"
+    "fixed-merkle-tree": "^0.7.3",
+    "snarkjs": "github:tornadocash/snarkjs#f37f146948f3b28086493e71512006b030588fc2"
   }
 }
