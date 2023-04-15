@@ -10,18 +10,19 @@ contract PPFactory {
 
     event PoolCreated(address poolAddress);
 
-
-    constructor() public {
-        poolImpl = address(new PPPool());
+    constructor() {
+        poolImpl = address(new PPPool(address(this)));
     }
 
     function createPool(
-        string calldata name,
-        string calldata symbol,
-        uint256 initialSupply
+        address hasher_,
+        uint32 levels_
     ) external returns (address) {
         address clone = Clones.clone(poolImpl);
-        PPPool(clone).initialize();
+        PPPool(clone).initialize(
+            hasher_,
+            levels_
+        );
         emit PoolCreated(clone);
         return clone;
     }
