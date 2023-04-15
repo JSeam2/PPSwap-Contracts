@@ -8,6 +8,19 @@ With Worldcoin and Lens at the moment it will be possible to offer a reasonable 
 
 In future more onchain identity and reputation mechanisms could be added into the reputation mechanism.
 
+## Structure
+1. `circuits`: The circom circuits adapted from Tornado Nova to support Shielded Swaps.
+2. `contracts`: Solidity contracts
+    - `interfaces`: Interfaces used
+    - `utils`: Utility contracts
+    - `PPFactory.sol`: Factory contract for PPPools
+    - `PPPool.sol`: Implementation of pool clone contracts that arre initialized by PPFactory
+    - `Reputation.sol`: Optional reputation gating mechanism using Lens and WorldID
+3. `scripts`: Scripts used to generate circuits and deploy contracts
+4. `test`: Smart contract tests
+5. `utils`: Cryptography utility functions
+
+
 ## Some comments
 
 Interestingly, this might have been Tornado V3 if the devs didn't get arrested. Free Alex Pertsev.
