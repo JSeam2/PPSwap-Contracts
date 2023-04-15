@@ -5,9 +5,12 @@ include "./keypair.circom"
 /*
 Utxo structure:
 {
-    amount,
+    amountTokenA,       // tokenA used for swap
+    reserveTokenA,      // tokenA reserves within the contract
+    amountTokenB,       // tokenB used for swap
+    reserveTokenB,      // tokenB reserves within the contract
     pubkey,
-    blinding, // random number
+    blinding,           // random number
 }
 commitment = hash(amount, pubKey, blinding)
 nullifier = hash(commitment, merklePath, sign(privKey, commitment, merklePath))

@@ -1,4 +1,5 @@
 // Generates Hasher artifact at compile-time using external compilermechanism
+// Required by merkle tree hashing
 const path = require('path')
 const fs = require('fs')
 const { poseidonContract } = require('circomlibjs');

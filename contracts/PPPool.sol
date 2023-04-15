@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0
 
-import "./interfaces/IHasher.sol";
-import "./interfaces/IVerifier.sol";
-import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
-
 pragma solidity ^0.8.0;
 
-contract PPPool is ReentrancyGuard {
+import "./interfaces/IHasher.sol";
+import "./interfaces/IVerifier.sol";
+import "./interfaces/IReputation.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/token/IERC20.sol";
+
+contract PPPool is ReentrancyGuard, IReputation {
     uint256 public constant FIELD_SIZE = 21888242871839275222246405745257275088548364400416034343698204186575808495617;
     uint256 public constant ZERO_VALUE = 21663839004416932945382355908790599225266501822907911457504978515578255421292; // = keccak256("tornado") % FIELD_SIZE
     uint32 public constant ROOT_HISTORY_SIZE = 100;
@@ -14,34 +16,45 @@ contract PPPool is ReentrancyGuard {
     address public immutable ppfactory;
 
     bool public initialized;
+
+    IReputation public reputation;
     IHasher public hasher;
     uint32 public levels;
     uint32 public currentRootIndex = 0; // todo remove
     uint32 public nextIndex = 0;
+    IERC20 public tokenA;
+    IERC20 public tokenB;
 
     mapping(uint256 => bytes32) public filledSubtrees;
     mapping(uint256 => bytes32) public roots;
 
-
     error Initialized();
     error NotFactory();
+    error InsufficientReputation();
+
 
     constructor(address ppfactory_) {
         ppfactory = ppfactory_;
     }
 
     function initialize(
+        address reputation_,
         address hasher_,
-        uint32 levels_
-
+        uint32 levels_,
+        address tokenA_,
+        address tokenB_
     ) public {
         if (msg.sender == ppfactory) {
             if (initialized) {
                 revert Initialized();
             } else {
                 initialized = true;
+
+                reputation = IReputation(reputation_);
                 hasher = IHasher(hasher_);
                 levels = levels_;
+                tokenA = IERC20(tokenA_);
+                tokenB = IERC20(tokenB_);
 
                 for (uint32 i = 0; i < levels; i++) {
                     filledSubtrees[i] = zeros(i);
@@ -80,16 +93,16 @@ contract PPPool is ReentrancyGuard {
         bytes32 right;
 
         for (uint32 i = 1; i < levels; i++) {
-        if (currentIndex % 2 == 0) {
-            left = currentLevelHash;
-            right = zeros(i);
-            filledSubtrees[i] = currentLevelHash;
-        } else {
-            left = filledSubtrees[i];
-            right = currentLevelHash;
-        }
-        currentLevelHash = hashLeftRight(left, right);
-        currentIndex /= 2;
+            if (currentIndex % 2 == 0) {
+                left = currentLevelHash;
+                right = zeros(i);
+                filledSubtrees[i] = currentLevelHash;
+            } else {
+                left = filledSubtrees[i];
+                right = currentLevelHash;
+            }
+            currentLevelHash = hashLeftRight(left, right);
+            currentIndex /= 2;
         }
 
         uint32 newRootIndex = (currentRootIndex + 1) % ROOT_HISTORY_SIZE;
@@ -104,18 +117,18 @@ contract PPPool is ReentrancyGuard {
     */
     function isKnownRoot(bytes32 _root) public view returns (bool) {
         if (_root == 0) {
-        return false;
+            return false;
         }
         uint32 _currentRootIndex = currentRootIndex;
         uint32 i = _currentRootIndex;
         do {
-        if (_root == roots[i]) {
-            return true;
-        }
-        if (i == 0) {
-            i = ROOT_HISTORY_SIZE;
-        }
-        i--;
+            if (_root == roots[i]) {
+                return true;
+            }
+            if (i == 0) {
+                i = ROOT_HISTORY_SIZE;
+            }
+            i--;
         } while (i != _currentRootIndex);
         return false;
     }
@@ -163,5 +176,22 @@ contract PPPool is ReentrancyGuard {
         else if (i == 31) return bytes32(0x166bdd01780976e655f5278260c638dcf10fe7c136f37c9152cbcaabef901f4d);
         else if (i == 32) return bytes32(0x2712c601a9b8b2abd396a619327095d3f1ea86a6c07d6df416a3973a1a4b3ce5);
         else revert("Index out of bounds");
+    }
+
+    //////////////////////////////////////////////////////
+    // PPSwap Logic
+    //////////////////////////////////////////////////////
+
+    /**
+     * @dev Handles deposit, withdraw, transfers, swaps within the contract
+     * Registration of identities will be handled by offchain processes like
+     * Worldcoin or Lens for example.
+     *
+     * To gate the pool, append your
+     */
+    function transact() public {
+
+        // TODO: Add your reputation gating mechanism
+        // if (!isReputable) revert InsufficientReputation();
     }
 }

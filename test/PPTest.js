@@ -5,24 +5,39 @@ const {
 const { anyValue } = require("@nomicfoundation/hardhat-chai-matchers/withArgs");
 const { expect } = require("chai");
 
-describe("Lock", function () {
+describe("PPTest", function () {
   // We define a fixture to reuse the same setup in every test.
   // We use loadFixture to run this setup once, snapshot that state,
   // and reset Hardhat Network to that snapshot in every test.
-  async function deployOneYearLockFixture() {
-    const ONE_YEAR_IN_SECS = 365 * 24 * 60 * 60;
-    const ONE_GWEI = 1_000_000_000;
+  async function deployFixture() {
+    const accounts = await ethers.getSigners();
 
-    const lockedAmount = ONE_GWEI;
-    const unlockTime = (await time.latest()) + ONE_YEAR_IN_SECS;
+    const TokenFactory = await ethers.getContractFactory("TestERC20");
+    const tokenA = await TokenFactory.deploy("TokenA", "TokenA", ethers.utils.parseUnits("100", "ether"));
+    await tokenA.deployed();
 
-    // Contracts are deployed using the first signer/account by default
-    const [owner, otherAccount] = await ethers.getSigners();
+    const tokenB = await TokenFactory.deploy("TokenA", "TokenA", ethers.utils.parseUnits("100", "ether"));
+    await tokenB.deployed();
 
-    const Lock = await ethers.getContractFactory("Lock");
-    const lock = await Lock.deploy(unlockTime, { value: lockedAmount });
+    const Factory = await ethers.getcontractfactory("ppfactory");
+    const factory = await Factory.deploy();
+    await factory.deployed();
 
-    return { lock, unlockTime, lockedAmount, owner, otherAccount };
+    require('../scripts/compileHasher');
+
+    const verifier2 = await deploy('Verifier2')
+    const verifier16 = await deploy('Verifier16')
+    const hasher = await deploy('Hasher')
+
+    const pool = await factory.createPool(
+
+    )
+
+    return {
+      accounts,
+      tokenA,
+      tokenB,
+    };
   }
 
   describe("Deployment", function () {

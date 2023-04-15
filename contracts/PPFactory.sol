@@ -15,13 +15,19 @@ contract PPFactory {
     }
 
     function createPool(
+        address reputation_,
         address hasher_,
-        uint32 levels_
+        uint32 levels_,
+        address tokenA_,
+        address tokenB_
     ) external returns (address) {
         address clone = Clones.clone(poolImpl);
         PPPool(clone).initialize(
+            reputation_,
             hasher_,
-            levels_
+            levels_,
+            tokenA_,
+            tokenB_
         );
         emit PoolCreated(clone);
         return clone;
