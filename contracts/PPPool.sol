@@ -7,6 +7,7 @@ import "./interfaces/IVerifier.sol";
 import "./interfaces/IReputation.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/token/IERC20.sol";
+import "@openzeppelin/contracts/token/IERC721.sol";
 
 contract PPPool is ReentrancyGuard, IReputation {
     uint256 public constant FIELD_SIZE = 21888242871839275222246405745257275088548364400416034343698204186575808495617;
@@ -31,10 +32,18 @@ contract PPPool is ReentrancyGuard, IReputation {
     error Initialized();
     error NotFactory();
     error InsufficientReputation();
+    error NotLensUser();
 
 
     constructor(address ppfactory_) {
         ppfactory = ppfactory_;
+    }
+
+    modifier isLensUser {
+        // https://mumbai.polygonscan.com/address/0x7582177F9E536aB0b6c721e11f383C326F2Ad1D5#code
+        IERC721 LensHub = IERC721("0x7582177F9E536aB0b6c721e11f383C326F2Ad1D5");
+        if (LensHub.balanceOf(msg.sender()) === 0) revert NotLensUser();
+        _;
     }
 
     function initialize(
