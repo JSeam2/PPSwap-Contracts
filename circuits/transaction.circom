@@ -5,9 +5,11 @@ include "./keypair.circom"
 /*
 Utxo structure:
 {
-    amountTokenA,       // tokenA used for swap
+    inAmountTokenA,       // tokenA used for swap
+    outAmountTokenA,
     reserveTokenA,      // tokenA reserves within the contract
-    amountTokenB,       // tokenB used for swap
+    inAmountTokenB,       // tokenB used for swap
+
     reserveTokenB,      // tokenB reserves within the contract
     pubkey,
     blinding,           // random number

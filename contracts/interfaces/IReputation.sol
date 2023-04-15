@@ -2,5 +2,5 @@
 pragma solidity ^0.8.0;
 
 interface IReputation {
-  function isReputable() external view returns (bool);
+  function checkReputation(address account, uint256[12] memory worldIdParams) external view;
 }

@@ -6,10 +6,9 @@ import "./interfaces/IHasher.sol";
 import "./interfaces/IVerifier.sol";
 import "./interfaces/IReputation.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
-import "@openzeppelin/contracts/token/IERC20.sol";
-import "@openzeppelin/contracts/token/IERC721.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-contract PPPool is ReentrancyGuard, IReputation {
+contract PPPool is ReentrancyGuard {
     uint256 public constant FIELD_SIZE = 21888242871839275222246405745257275088548364400416034343698204186575808495617;
     uint256 public constant ZERO_VALUE = 21663839004416932945382355908790599225266501822907911457504978515578255421292; // = keccak256("tornado") % FIELD_SIZE
     uint32 public constant ROOT_HISTORY_SIZE = 100;
@@ -31,20 +30,12 @@ contract PPPool is ReentrancyGuard, IReputation {
 
     error Initialized();
     error NotFactory();
-    error InsufficientReputation();
-    error NotLensUser();
-
+    error Unauthorized();
 
     constructor(address ppfactory_) {
         ppfactory = ppfactory_;
     }
 
-    modifier isLensUser {
-        // https://mumbai.polygonscan.com/address/0x7582177F9E536aB0b6c721e11f383C326F2Ad1D5#code
-        IERC721 LensHub = IERC721("0x7582177F9E536aB0b6c721e11f383C326F2Ad1D5");
-        if (LensHub.balanceOf(msg.sender()) === 0) revert NotLensUser();
-        _;
-    }
 
     function initialize(
         address reputation_,
@@ -196,11 +187,28 @@ contract PPPool is ReentrancyGuard, IReputation {
      * Registration of identities will be handled by offchain processes like
      * Worldcoin or Lens for example.
      *
-     * To gate the pool, append your
+     * To gate the pool, initialize with a reputation contract
      */
-    function transact() public {
+    function transact(
+        uint256[12] memory worldIdParams
+    ) public {
+        if (address(reputation) == address(0)) {
+        } else {
+            // reverts if not reputable
+            reputation.checkReputation(msg.sender, worldIdParams);
+        }
+    }
 
-        // TODO: Add your reputation gating mechanism
-        // if (!isReputable) revert InsufficientReputation();
+    /**
+     * @dev overloaded function to be called if reputation is not address 0
+     */
+    function transact(
+
+    ) public {
+        if (address(reputation) != address(0)) {
+            revert Unauthorized();
+        } else {
+
+        }
     }
 }
